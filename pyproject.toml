@@ -1,22 +1,13 @@
 [project]
-name = "clock-model-pccdata"
+name = "tgage-anonymous-release"
 version = "0.1.0"
-description = "Add your description here"
+description = "Anonymous core implementation of TGAge."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
-    "lifelines>=0.30.0",
-    "matplotlib>=3.10.0",
-    "numpy>=2.4.0",
-    "pandas>=3.0.0",
-    "polars>=1.37.1",
-    "scikit-learn>=1.5.0",
-    "scikit-survival>=0.25.0",
-    "scipy>=1.17.0",
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "polars>=0.20",
+    "scikit-learn>=1.4",
     "tabpfn==8.0.7",
-    "torch>=2.6.0",
-    "tqdm>=4.67.1",
-    "transformers>=4.40.0",
-    "xgboost>=3.2.0",
-    "xlrd>=2.0.1",
 ]
