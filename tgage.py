@@ -80,6 +80,7 @@ def parse_mrdt_values(raw: str) -> dict[str, float]:
 
 @dataclass(frozen=True)
 class PublicSchema:
+    # Public, generic analysis schema. Private source-column mapping stays outside this release.
     subject_id: str
     chronological_age: str
     sex: str
@@ -125,6 +126,7 @@ def validate_unique_subjects(df: pd.DataFrame, label: str) -> None:
 
 
 def clean_analytic_rows(df: pd.DataFrame, feature_columns: list[str] | None) -> pd.DataFrame:
+    # Keep rows with complete covariates and valid right-censored survival labels.
     required = ["subject_id", "chronological_age", "sex", "followup_years", "event_death", "index_year"]
     if feature_columns is not None:
         required.extend(feature_columns)
@@ -145,12 +147,15 @@ def clean_analytic_rows(df: pd.DataFrame, feature_columns: list[str] | None) -> 
 
 
 def assign_temporal_split(df: pd.DataFrame, train_end_year: int, test_start_year: int) -> pd.DataFrame:
+    # Time-based split avoids training on records indexed after the held-out period begins.
     out = df.copy()
     out["split"] = np.where(out["index_year"] <= train_end_year, "train", np.where(out["index_year"] >= test_start_year, "test", "excluded"))
     return out[out["split"] != "excluded"].reset_index(drop=True)
 
 
 def make_time_bin_labels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, dict[str, int]]:
+    # Four-class target: event-free through 3 years, or death in year 1, 2, or 3.
+    # Non-events censored before 3 years are scored but not used to fit classifiers.
     followup = df["followup_years"].astype(float)
     event = df["event_death"].astype(int)
 
@@ -182,6 +187,7 @@ def class_counts(labels: pd.Series) -> dict[str, int]:
 
 
 def assign_oof_folds(train: pd.DataFrame, labels: pd.Series, eligible: pd.Series, n_folds: int, seed: int) -> np.ndarray:
+    # Training predictions are out-of-fold, stratified by target class and sex.
     rng = np.random.default_rng(seed)
     folds = np.full(len(train), -1, dtype=int)
     strata = pd.Series("unlabeled", index=train.index, dtype="string")
@@ -204,6 +210,7 @@ class DesignSpec:
 
 
 def fit_design_spec(df: pd.DataFrame, numeric_columns: list[str]) -> DesignSpec:
+    # Minimal preprocessing: z-score numeric predictors and one-hot encode sex.
     means: dict[str, float] = {}
     scales: dict[str, float] = {}
     for column in numeric_columns:
@@ -265,6 +272,7 @@ def predict_class_probabilities(model: Any, design: np.ndarray) -> np.ndarray:
 
 
 def stratified_context(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
+    # Cap TabPFN context size while preserving class/sex representation.
     if len(df) <= max_rows:
         return df.copy().reset_index(drop=True)
     rng = np.random.default_rng(seed)
@@ -289,6 +297,7 @@ def fit_predict_pair(
     args: argparse.Namespace,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    # Paired classifiers estimate full clinical risk and age/sex reference risk.
     full_context = stratified_context(full_training_rows, args.max_context_rows, seed)
     reference_context = stratified_context(reference_training_rows, args.max_context_rows, seed + 1)
 
@@ -319,6 +328,7 @@ def fit_predict_pair(
 
 
 def add_tgage_scores(df: pd.DataFrame, mrdt_values: dict[str, float], eps: float) -> pd.DataFrame:
+    # Convert excess mortality risk into age units using sex-specific MRDT.
     out = df.copy()
     age = out["chronological_age"].astype(float).to_numpy()
     mrdt = out["sex"].astype(str).map(mrdt_values).astype(float).to_numpy()
@@ -349,6 +359,7 @@ def score_tgage(
     mrdt_values: dict[str, float],
     args: argparse.Namespace,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    # OOF models score training rows; one final refit scores held-out test rows.
     train = modeling_df[modeling_df["split"] == "train"].copy().reset_index(drop=True)
     test = modeling_df[modeling_df["split"] == "test"].copy().reset_index(drop=True)
     reference_train = reference_df[reference_df["split"] == "train"].copy().reset_index(drop=True)
