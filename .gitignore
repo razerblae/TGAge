@@ -2,9 +2,6 @@
 .venv/
 __pycache__/
 *.pyc
-.Rhistory
-.RData
-.Rproj.user/
 
 # Secrets / credentials
 .env
@@ -42,13 +39,6 @@ checkpoints/
 *.joblib
 *.pt
 *.pth
-
-# Manuscript / identity-sensitive files
-paper/
-manuscript/
-*.pdf
-*.docx
-*.pptx
 
 # OS / editor
 .DS_Store

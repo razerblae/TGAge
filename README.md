@@ -6,7 +6,7 @@ The release is intentionally limited to the model construction code. It does not
 
 ## Method Summary
 
-TGAge trains two multiclass TabPFN classifiers on fixed 3-year mortality time bins:
+TGAge trains two multiclass TabPFN classifiers on a chosen prediction horizon (here we use 3 years as an example), discretized into intervals:
 
 - a full model using chronological age, sex, and selected clinical features;
 - a reference model using chronological age and sex only.
@@ -22,23 +22,19 @@ Training rows are scored out of fold. Held-out test rows are scored by models fi
 
 ## Inputs
 
-Use either:
+The script intentionally does not guess source column names. Before running it, prepare an anonymized CSV with public, generic column names:
 
-- `--modeling-table-path`: one CSV/parquet table containing ID, age, sex, survival labels, split date/year, and feature columns; or
-- `--survival-path` plus `--feature-table-path`: separate survival/cohort and feature tables joined by `ClientId`.
-
-Required standardized fields, with common aliases accepted:
-
-- `ClientId`
-- `CA`
+- `subject_id`
+- `chronological_age`
 - `sex`
 - `followup_years`
 - `event_death`
-- `index_year` or `index_date`
+- `index_year`
+- selected feature columns, supplied explicitly with `--feature-columns`
 
-Feature columns can be supplied with `--feature-columns F1,F2,...` or through `--feature-metadata-path`, whose feature-name column may be `feature`, `feature_name`, `predictor`, or `parName`.
+If your local analytic table uses different names, pass the corresponding `--*-column` arguments. Do not publish private data dictionaries or source-system column names with this release.
 
-Sex-specific mortality-rate doubling time values are required through `--mrdt-f/--mrdt-m` or `--mrdt-path`.
+Sex-specific mortality-rate doubling time values are supplied as `--mrdt-values`, for example `F=8,M=8`.
 
 ## Usage
 
@@ -48,34 +44,21 @@ Install dependencies:
 uv sync
 ```
 
-Run a preparation-only smoke check:
+Run on an anonymized analytic table:
 
 ```bash
 uv run python tgage.py \
-  --make-synthetic-smoke-data \
-  --prepare-only \
-  --mrdt-f 8 \
-  --mrdt-m 8
-```
-
-Run on analytic data:
-
-```bash
-uv run python tgage.py \
-  --survival-path data/survival.csv \
-  --feature-table-path data/features.csv \
-  --feature-metadata-path data/selected_features.csv \
-  --mrdt-f 8.0 \
-  --mrdt-m 8.0 \
+  --modeling-table data/anonymized_modeling_table.csv \
+  --feature-columns feature_01,feature_02,feature_03 \
+  --mrdt-values F=8,M=8 \
   --out-dir outputs/tgage
 ```
 
 Main outputs:
 
-- `tgage_individual_predictions.csv`
-- `tgage_score_metrics.csv`
+- `tgage_predictions.csv`
 - `diagnostics.json`
-- `run_config_used.json`
+- `run_config.json`
 
 ## Data Availability
 
