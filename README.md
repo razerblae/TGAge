@@ -1,8 +1,8 @@
 # TGAge
 
-This repository contains an anonymous core implementation of **TGAge**, a tabular-foundation-model-based biological aging clock.
+This repository contains the core implementation of **TGAge**, a tabular-foundation-model-based second-generation biological aging clock.
 
-The release is intentionally limited to the model construction code. It does not include private data, derived cohorts, fitted model artifacts, logs, or manuscript-identifying material.
+The release is intentionally limited to the model construction code. It does not include the private data source, derived cohorts, fitted model artifacts, logs, or manuscript-identifying material.
 
 ## Method Summary
 
