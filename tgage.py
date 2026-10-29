@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 
+# Class 0 is follow-up > 3 years (k = 4 in the manuscript).
 TIME_BIN_CLASSES = [0, 1, 2, 3]
 EPS = 1.0e-6
 
@@ -154,29 +155,25 @@ def assign_temporal_split(df: pd.DataFrame, train_end_year: int, test_start_year
 
 
 def make_time_bin_labels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, dict[str, int]]:
-    # Four-class target: event-free through 3 years, or death in year 1, 2, or 3.
-    # Non-events censored before 3 years are scored but not used to fit classifiers.
+    # Bin follow-up ending (death or censoring); all cleaned rows are eligible.
     followup = df["followup_years"].astype(float)
-    event = df["event_death"].astype(int)
 
-    class_1 = (event == 1) & (followup <= 1.0)
-    class_2 = (event == 1) & (followup > 1.0) & (followup <= 2.0)
-    class_3 = (event == 1) & (followup > 2.0) & (followup <= 3.0)
-    class_0 = (followup >= 3.0) & ~((event == 1) & (followup <= 3.0))
-    eligible = class_0 | class_1 | class_2 | class_3
+    class_1 = followup <= 1.0
+    class_2 = (followup > 1.0) & (followup <= 2.0)
+    class_3 = (followup > 2.0) & (followup <= 3.0)
+    class_0 = followup > 3.0
+    eligible = pd.Series(True, index=df.index, dtype=bool)
 
-    labels = pd.Series(np.nan, index=df.index, dtype=float)
-    labels.loc[class_0] = 0
+    labels = pd.Series(0, index=df.index, dtype=int)
     labels.loc[class_1] = 1
     labels.loc[class_2] = 2
     labels.loc[class_3] = 3
 
     diagnostics = {
-        "class_0_event_free_through_3y": int(class_0.sum()),
-        "class_1_death_le_1y": int(class_1.sum()),
-        "class_2_death_gt_1_le_2y": int(class_2.sum()),
-        "class_3_death_gt_2_le_3y": int(class_3.sum()),
-        "excluded_censored_before_3y": int(((event == 0) & (followup < 3.0)).sum()),
+        "class_0_followup_gt_3y": int(class_0.sum()),
+        "class_1_followup_le_1y": int(class_1.sum()),
+        "class_2_followup_gt_1_le_2y": int(class_2.sum()),
+        "class_3_followup_gt_2_le_3y": int(class_3.sum()),
     }
     return labels, eligible, diagnostics
 
@@ -272,7 +269,9 @@ def predict_class_probabilities(model: Any, design: np.ndarray) -> np.ndarray:
 
 
 def stratified_context(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
-    # Cap TabPFN context size while preserving class/sex representation.
+    # Allocate proportional class/sex quotas, rounded by largest remainder.
+    if max_rows < 1:
+        raise ValueError("--max-context-rows must be at least 1.")
     if len(df) <= max_rows:
         return df.copy().reset_index(drop=True)
     rng = np.random.default_rng(seed)
@@ -280,13 +279,14 @@ def stratified_context(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFra
     work["_random"] = rng.random(len(work))
     work["_stratum"] = work["y_time_bin"].astype(int).astype(str) + "|" + work["sex"].astype(str)
     strata = list(work.groupby("_stratum", sort=True))
-    base_take = max(1, max_rows // len(strata))
-    selected = [group.nsmallest(base_take, "_random") for _, group in strata]
+    quotas = np.array([len(group) for _, group in strata], dtype=float) * max_rows / len(work)
+    takes = np.floor(quotas).astype(int)
+    remainder = max_rows - int(takes.sum())
+    order = np.argsort(-(quotas - takes), kind="stable")
+    takes[order[:remainder]] += 1
+    selected = [group.nsmallest(int(take), "_random") for (_, group), take in zip(strata, takes) if take > 0]
     out = pd.concat(selected, ignore_index=True)
-    if len(out) < max_rows:
-        remaining = work[~work["subject_id"].isin(out["subject_id"])]
-        out = pd.concat([out, remaining.nsmallest(max_rows - len(out), "_random")], ignore_index=True)
-    return out.nsmallest(max_rows, "_random").drop(columns=["_random", "_stratum"]).reset_index(drop=True)
+    return out.sort_values("_random").drop(columns=["_random", "_stratum"]).reset_index(drop=True)
 
 
 def fit_predict_pair(
@@ -297,7 +297,7 @@ def fit_predict_pair(
     args: argparse.Namespace,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
-    # Paired classifiers estimate full clinical risk and age/sex reference risk.
+    # Paired classifiers estimate follow-up ending with clinical or age/sex predictors.
     full_context = stratified_context(full_training_rows, args.max_context_rows, seed)
     reference_context = stratified_context(reference_training_rows, args.max_context_rows, seed + 1)
 
@@ -321,6 +321,11 @@ def fit_predict_pair(
             "seed": seed,
             "full_context_rows": int(len(full_context)),
             "reference_context_rows": int(len(reference_context)),
+            "context_sampling": "proportional_class_sex",
+            "full_training_class_counts": class_counts(full_training_rows["y_time_bin"]),
+            "full_context_class_counts": class_counts(full_context["y_time_bin"]),
+            "reference_training_class_counts": class_counts(reference_training_rows["y_time_bin"]),
+            "reference_context_class_counts": class_counts(reference_context["y_time_bin"]),
             "full_model": full_init,
             "reference_model": reference_init,
         },
@@ -328,7 +333,7 @@ def fit_predict_pair(
 
 
 def add_tgage_scores(df: pd.DataFrame, mrdt_values: dict[str, float], eps: float) -> pd.DataFrame:
-    # Convert excess mortality risk into age units using sex-specific MRDT.
+    # Convert the follow-up-ending probability ratio to age units using MRDT.
     out = df.copy()
     age = out["chronological_age"].astype(float).to_numpy()
     mrdt = out["sex"].astype(str).map(mrdt_values).astype(float).to_numpy()
@@ -336,6 +341,7 @@ def add_tgage_scores(df: pd.DataFrame, mrdt_values: dict[str, float], eps: float
         missing = sorted(set(out.loc[~np.isfinite(mrdt), "sex"].astype(str)))
         raise ValueError(f"Missing MRDT values for sex label(s): {missing}")
 
+    # The risk_* columns are cumulative follow-up-ending probabilities.
     for prefix in ["full", "reference"]:
         out[f"risk_{prefix}_1y"] = out[f"p_{prefix}_class_1"]
         out[f"risk_{prefix}_2y"] = out[f"p_{prefix}_class_1"] + out[f"p_{prefix}_class_2"]
@@ -466,7 +472,7 @@ def load_inputs(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame, l
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Core TGAge implementation for anonymized tabular survival data.")
+    parser = argparse.ArgumentParser(description="Core TGAge implementation for tabular survival data.")
     parser.add_argument("--modeling-table", required=True, help="CSV containing anonymized survival columns and feature columns.")
     parser.add_argument("--reference-table", default="", help="Optional CSV for the age/sex reference model. Defaults to modeling table.")
     parser.add_argument("--feature-columns", required=True, help="Comma-separated anonymized feature column names.")
@@ -486,7 +492,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tabpfn-model-version", choices=["v2", "v2.5", "v2.6", "v3"], default="v3")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--n-estimators", type=int, default=8)
-    parser.add_argument("--max-context-rows", type=int, default=10000)
+    parser.add_argument("--max-context-rows", type=int, default=10000, help="Context cap per model; larger pools are sampled proportionally by class and sex.")
     parser.add_argument("--n-folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     return parser
@@ -498,6 +504,8 @@ def main() -> None:
         raise ValueError("--train-end-year must be less than --test-start-year.")
     if args.n_folds < 2:
         raise ValueError("--n-folds must be at least 2.")
+    if args.max_context_rows < 1:
+        raise ValueError("--max-context-rows must be at least 1.")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

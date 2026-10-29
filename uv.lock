@@ -1441,7 +1441,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tgage-anonymous-release"
+name = "tgage"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
